@@ -25,10 +25,6 @@ _DEFAULT_TIMEOUT = 30
 
 
 class WeatherClient:
-    """
-    Thin wrapper around the National Weather Service API.
-    """
-
     def __init__(
         self,
         timeout: int = _DEFAULT_TIMEOUT
@@ -39,110 +35,55 @@ class WeatherClient:
         self.session = requests.Session()
 
         self.session.headers.update(
-            {
-                "User-Agent": "weather-intelligence-homework"
-            }
+            {"User-Agent": "Weather-Intelligence-Homework"}
         )
 
-
-    def get(
-        self,
-        path: str,
-        params=None
-    ):
-        """
-        Generic GET wrapper.
-        """
-
+    def get(self, path: str, params=None):
         response = self.session.get(
             f"{self.base_url}{path}",
             params=params,
             timeout=self.timeout
         )
-
         response.raise_for_status()
-
         return response.json()
 
-
-
-    def geocode_location(
-        self,
-        location: str
-    ):
-        """
-        Convert city/state into latitude longitude.
-        """
-
-        response = requests.get(
-            _GEOCODE_URL,
+    def geocode_location(self,location: str):
+        response = requests.get(_GEOCODE_URL,
             params={
                 "q": location,
                 "format": "json",
                 "limit": 1
             },
             headers={
-                "User-Agent": "weather-intelligence-homework"
+                "User-Agent": "Weather-Intelligence-Homework"
             },
             timeout=self.timeout
         )
-
         response.raise_for_status()
-
         results = response.json()
-
         if not results:
             raise ValueError(
                 f"Unable to geocode {location}"
             )
-
 
         return {
             "lat": float(results[0]["lat"]),
             "lon": float(results[0]["lon"])
         }
 
-
-
-    def get_points(
-        self,
-        lat,
-        lon
-    ):
-        """
-        Resolve coordinates into NWS grid point.
-        """
-
+    def get_points(self, lat, lon):
         return self.get(
             f"/points/{lat},{lon}"
         )
 
-
-
-    def get_forecast(
-        self,
-        grid_id,
-        grid_x,
-        grid_y
-    ):
-        """
-        Fetch NWS forecast.
-        """
-
+    def get_forecast(self, grid_id, grid_x,grid_y):
         return self.get(
             f"/gridpoints/{grid_id}/{grid_x},{grid_y}/forecast"
         )
 
 
 
-    def get_alerts(
-        self,
-        state
-    ):
-        """
-        Fetch active weather alerts.
-        """
-
+    def get_alerts(self, state):
         return self.get(
             "/alerts/active",
             params={
@@ -150,28 +91,14 @@ class WeatherClient:
             }
         )
 
-
-
-    def normalize_forecast(
-        self,
-        location,
-        forecast
-    ):
-
+    def normalize_forecast(self, location, forecast):
         documents = []
-
         properties = forecast["properties"]
-
         issued_at = properties.get(
             "updateTime"
         )
 
-
-        for period in properties.get(
-            "periods",
-            []
-        ):
-
+        for period in properties.get("periods",[]):
             stable_id = hashlib.sha256(
                 (
                     f"{location}-"
@@ -202,154 +129,46 @@ class WeatherClient:
 
         return documents
 
-
-
-    def normalize_alerts(
-        self,
-        location,
-        alerts
-    ):
-
+    def normalize_alerts(self, location,alerts):
         documents = []
-
-
         for feature in alerts.get(
-            "features",
-            []
-        ):
-
-            props = feature.get(
-                "properties",
-                {}
+            "features",[]):
+            props = feature.get("properties",{})
+            narrative = (props.get("description","") + "\n\n" + props.get("instruction","")
             )
-
-
-            narrative = (
-                props.get(
-                    "description",
-                    ""
-                )
-                +
-                "\n\n"
-                +
-                props.get(
-                    "instruction",
-                    ""
-                )
-            )
-
 
             documents.append(
                 {
-                    "id": props.get(
-                        "id"
-                    ),
+                    "id": props.get("id"),
                     "location": location,
                     "source_type": "alert",
-                    "headline": props.get(
-                        "event"
-                    ),
+                    "headline": props.get("event"),
                     "narrative_text": narrative,
-                    "issued_at": props.get(
-                        "effective"
-                    ),
+                    "issued_at": props.get("effective"),
                     "payload": props,
-                    "synced_at": datetime.now(
-                        timezone.utc
+                    "synced_at": datetime.now(timezone.utc
                     )
                 }
             )
-
-
         return documents
 
-
-
-    def fetch_location(
-        self,
-        location
-    ):
-        """
-        Complete ingestion flow for one location.
-        """
-
+    def fetch_location(self,location):
         documents = []
-
-
-        coords = self.geocode_location(
-            location
-        )
-
-
-        points = self.get_points(
-            coords["lat"],
-            coords["lon"]
-        )
-
-
+        coords = self.geocode_location(location)
+        points = self.get_points(coords["lat"],coords["lon"])
         props = points["properties"]
-
-
-        forecast = self.get_forecast(
-            props["gridId"],
-            props["gridX"],
-            props["gridY"]
-        )
-
-
-        documents.extend(
-            self.normalize_forecast(
-                location,
-                forecast
-            )
-        )
-
-
+        forecast = self.get_forecast(props["gridId"], props["gridX"], props["gridY"])
+        documents.extend(self.normalize_forecast(location, forecast))
         state = location.split(",")[-1].strip()
-
-
-        alerts = self.get_alerts(
-            state
-        )
-
-
-        documents.extend(
-            self.normalize_alerts(
-                location,
-                alerts
-            )
-        )
-
-
+        alerts = self.get_alerts(state)
+        documents.extend(self.normalize_alerts(location, alerts))
         return documents
 
-
-
-    def fetch_locations(
-        self,
-        locations,
-        limit=50
-    ):
-        """
-        Fetch multiple locations.
-        """
-
+    def fetch_locations(self, locations, limit=50):
         documents = []
-
-
         for location in locations:
-
-            docs = self.fetch_location(
-                location
-            )
-
-            documents.extend(
-                docs
-            )
-
-
+            docs = self.fetch_location(location)
+            documents.extend(docs)
             if len(documents) >= limit:
                 break
-
-
         return documents[:limit]
